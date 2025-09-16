@@ -1,19 +1,24 @@
-import { kv, createClient } from '@vercel/kv'
-
-// Create custom client if standard environment variables are missing
-const kvClient = process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN
-  ? kv
-  : process.env.REDIS_URL
-    ? createClient({
-        url: process.env.REDIS_URL.split('@')[1] ? `https://${process.env.REDIS_URL.split('@')[1]}` : process.env.REDIS_URL,
-        token: process.env.REDIS_URL.includes(':') ? process.env.REDIS_URL.split(':')[2]?.split('@')[0] : ''
-      })
-    : kv
+import { createClient } from 'redis'
 
 export interface Agent {
   name: string
   assistantId: string
   createdAt: string
+}
+
+// Create Redis client
+const redis = createClient({
+  url: process.env.REDIS_URL
+})
+
+// Connect to Redis
+let isConnected = false
+async function connectRedis() {
+  if (!isConnected && process.env.REDIS_URL) {
+    await redis.connect()
+    isConnected = true
+  }
+  return redis
 }
 
 const RESERVED_NAMES = ['admin', 'api', 'auth', 'login', 'logout', '_next', 'public']
@@ -33,40 +38,51 @@ export async function createAgent(name: string, assistantId: string): Promise<Ag
   if (validationError) throw new Error(validationError)
   if (!assistantId.trim()) throw new Error('Assistant ID is required')
 
-  const existing = await kvClient.get(`agent:${name}`)
-  if (existing) throw new Error('Agent with this name already exists')
+  try {
+    const client = await connectRedis()
+    const existing = await client.get(`agent:${name}`)
+    if (existing) throw new Error('Agent with this name already exists')
 
-  const agent: Agent = {
-    name,
-    assistantId: assistantId.trim(),
-    createdAt: new Date().toISOString()
+    const agent: Agent = {
+      name,
+      assistantId: assistantId.trim(),
+      createdAt: new Date().toISOString()
+    }
+
+    await client.set(`agent:${name}`, JSON.stringify(agent))
+    return agent
+  } catch (error) {
+    console.error('Error creating agent:', error)
+    throw error
   }
-
-  await kvClient.set(`agent:${name}`, agent)
-  return agent
 }
 
 export async function getAgent(name: string): Promise<Agent | null> {
   try {
-    const agent = await kvClient.get<Agent>(`agent:${name}`)
-    return agent
+    const client = await connectRedis()
+    const result = await client.get(`agent:${name}`)
+    return result ? JSON.parse(result) : null
   } catch (error) {
-    console.error('KV error in getAgent:', error)
+    console.error('Redis error in getAgent:', error)
     return null
   }
 }
 
 export async function getAllAgents(): Promise<Agent[]> {
   try {
-    const keys = await kvClient.keys('agent:*')
+    const client = await connectRedis()
+    const keys = await client.keys('agent:*')
     if (keys.length === 0) return []
 
-    const agents = await kvClient.mget<Agent[]>(...keys)
-    return agents.filter(Boolean).sort((a, b) =>
-      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-    )
+    const results = await client.mGet(keys)
+    const agents = results
+      .filter(Boolean)
+      .map(result => JSON.parse(result as string) as Agent)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+
+    return agents
   } catch (error) {
-    console.error('KV error in getAllAgents:', error)
+    console.error('Redis error in getAllAgents:', error)
     return []
   }
 }
@@ -74,22 +90,35 @@ export async function getAllAgents(): Promise<Agent[]> {
 export async function updateAgent(name: string, assistantId: string): Promise<Agent> {
   if (!assistantId.trim()) throw new Error('Assistant ID is required')
 
-  const existing = await kvClient.get<Agent>(`agent:${name}`)
-  if (!existing) throw new Error('Agent not found')
+  try {
+    const client = await connectRedis()
+    const existingStr = await client.get(`agent:${name}`)
+    if (!existingStr) throw new Error('Agent not found')
 
-  const updatedAgent: Agent = {
-    ...existing,
-    assistantId: assistantId.trim()
+    const existing = JSON.parse(existingStr) as Agent
+    const updatedAgent: Agent = {
+      ...existing,
+      assistantId: assistantId.trim()
+    }
+
+    await client.set(`agent:${name}`, JSON.stringify(updatedAgent))
+    return updatedAgent
+  } catch (error) {
+    console.error('Error updating agent:', error)
+    throw error
   }
-
-  await kvClient.set(`agent:${name}`, updatedAgent)
-  return updatedAgent
 }
 
 export async function deleteAgent(name: string): Promise<boolean> {
-  const existing = await kvClient.get(`agent:${name}`)
-  if (!existing) return false
+  try {
+    const client = await connectRedis()
+    const existing = await client.get(`agent:${name}`)
+    if (!existing) return false
 
-  await kvClient.del(`agent:${name}`)
-  return true
+    await client.del(`agent:${name}`)
+    return true
+  } catch (error) {
+    console.error('Error deleting agent:', error)
+    return false
+  }
 }
