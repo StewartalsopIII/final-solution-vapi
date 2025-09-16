@@ -16,25 +16,39 @@ export default function VapiWidget({ assistantId, agentName }: VapiWidgetProps) 
   useEffect(() => {
     const initVapi = async () => {
       try {
+        const vapiKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY
+        if (!vapiKey) {
+          setError('VAPI public key not configured')
+          return
+        }
+
+        console.log('Initializing VAPI with key:', vapiKey.substring(0, 10) + '...')
+
         const { default: Vapi } = await import('@vapi-ai/web')
-        const vapiInstance = new Vapi(process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY!)
+        const vapiInstance = new Vapi(vapiKey)
 
         vapiInstance.on('call-start', () => {
+          console.log('VAPI call started')
           setIsCallActive(true)
           setIsLoading(false)
           setError('')
         })
 
         vapiInstance.on('call-end', () => {
+          console.log('VAPI call ended')
           setIsCallActive(false)
           setIsLoading(false)
         })
 
         vapiInstance.on('error', (error: unknown) => {
           console.error('VAPI error:', error)
-          setError('Call failed. Please try again.')
+          setError('Call failed. Please check your VAPI configuration.')
           setIsCallActive(false)
           setIsLoading(false)
+        })
+
+        vapiInstance.on('message', (message: unknown) => {
+          console.log('VAPI message:', message)
         })
 
         setVapi(vapiInstance)
@@ -44,11 +58,7 @@ export default function VapiWidget({ assistantId, agentName }: VapiWidgetProps) 
       }
     }
 
-    if (process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY) {
-      initVapi()
-    } else {
-      setError('VAPI not configured')
-    }
+    initVapi()
   }, [])
 
   const startCall = async () => {
@@ -58,7 +68,9 @@ export default function VapiWidget({ assistantId, agentName }: VapiWidgetProps) 
     setError('')
 
     try {
-      await (vapi as { start: (config: { assistantId: string; metadata: { agentName: string; timestamp: string } }) => Promise<void> }).start({
+      console.log('Starting call with assistant ID:', assistantId)
+
+      await (vapi as { start: (config: { assistantId: string; metadata?: { agentName: string; timestamp: string } }) => Promise<void> }).start({
         assistantId,
         metadata: {
           agentName,
@@ -67,7 +79,8 @@ export default function VapiWidget({ assistantId, agentName }: VapiWidgetProps) 
       })
     } catch (err) {
       console.error('Failed to start call:', err)
-      setError('Failed to start call. Please check your connection.')
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+      setError(`Failed to start call: ${errorMessage}`)
       setIsLoading(false)
     }
   }

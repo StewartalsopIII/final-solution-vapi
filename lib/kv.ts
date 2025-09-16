@@ -6,18 +6,23 @@ export interface Agent {
   createdAt: string
 }
 
-// Create Redis client
-const redis = createClient({
-  url: process.env.REDIS_URL
-})
+// Create Redis client singleton
+let redis: ReturnType<typeof createClient> | null = null
 
-// Connect to Redis
-let isConnected = false
-async function connectRedis() {
-  if (!isConnected && process.env.REDIS_URL) {
-    await redis.connect()
-    isConnected = true
+async function getRedisClient() {
+  if (!process.env.REDIS_URL) {
+    throw new Error('REDIS_URL environment variable is not set')
   }
+
+  if (!redis) {
+    redis = createClient({
+      url: process.env.REDIS_URL
+    })
+
+    redis.on('error', (err) => console.error('Redis Client Error', err))
+    await redis.connect()
+  }
+
   return redis
 }
 
@@ -39,7 +44,7 @@ export async function createAgent(name: string, assistantId: string): Promise<Ag
   if (!assistantId.trim()) throw new Error('Assistant ID is required')
 
   try {
-    const client = await connectRedis()
+    const client = await getRedisClient()
     const existing = await client.get(`agent:${name}`)
     if (existing) throw new Error('Agent with this name already exists')
 
@@ -59,7 +64,7 @@ export async function createAgent(name: string, assistantId: string): Promise<Ag
 
 export async function getAgent(name: string): Promise<Agent | null> {
   try {
-    const client = await connectRedis()
+    const client = await getRedisClient()
     const result = await client.get(`agent:${name}`)
     return result ? JSON.parse(result) : null
   } catch (error) {
@@ -70,7 +75,7 @@ export async function getAgent(name: string): Promise<Agent | null> {
 
 export async function getAllAgents(): Promise<Agent[]> {
   try {
-    const client = await connectRedis()
+    const client = await getRedisClient()
     const keys = await client.keys('agent:*')
     if (keys.length === 0) return []
 
@@ -91,7 +96,7 @@ export async function updateAgent(name: string, assistantId: string): Promise<Ag
   if (!assistantId.trim()) throw new Error('Assistant ID is required')
 
   try {
-    const client = await connectRedis()
+    const client = await getRedisClient()
     const existingStr = await client.get(`agent:${name}`)
     if (!existingStr) throw new Error('Agent not found')
 
@@ -111,7 +116,7 @@ export async function updateAgent(name: string, assistantId: string): Promise<Ag
 
 export async function deleteAgent(name: string): Promise<boolean> {
   try {
-    const client = await connectRedis()
+    const client = await getRedisClient()
     const existing = await client.get(`agent:${name}`)
     if (!existing) return false
 
